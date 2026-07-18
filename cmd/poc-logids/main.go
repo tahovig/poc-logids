@@ -25,6 +25,7 @@ func main() {
 	threshold := flag.Int("threshold", detector.DefaultConfig.Threshold, "minimum failed attempts from one source to flag as brute-force")
 	window := flag.Duration("window", detector.DefaultConfig.Window, "time window attempts must fall within (e.g. 60s, 5m)")
 	follow := flag.Bool("follow", false, "keep watching the file for new activity after the initial scan, like tail -f")
+	quietStartup := flag.Bool("quiet-startup", false, "with -follow, skip printing the initial batch scan's alerts and only report new activity going forward -- for a long-running service that may restart (crash, reboot) and shouldn't re-report the whole file's history each time")
 	flag.Parse()
 
 	if *filePath == "" {
@@ -42,9 +43,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := printAlerts(detector.Detect(events, cfg), *jsonOut); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	if !*quietStartup {
+		if err := printAlerts(detector.Detect(events, cfg), *jsonOut); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if !*follow {
