@@ -8,7 +8,7 @@ Second in a series of portfolio projects supporting a pivot from software engine
 
 ## Status
 
-Core detection works: parse an auth.log-style file, flag SSH brute-force bursts, output as a table or JSON. Live-tail mode not yet built.
+Full pipeline works: scan an auth.log-style file for SSH brute-force bursts, then optionally keep watching it live (`-follow`, `tail -f`-style) and alert on new activity as it happens — including through log rotation (rename+recreate or in-place truncation).
 
 ```
 $ poc-logids -file resources/loghub-linux/Linux_2k.log
@@ -16,6 +16,10 @@ SOURCE                                    ATTEMPTS  FIRST SEEN       LAST SEEN  
 220-135-151-1.hinet-ip.hinet.net          10        Jun 15 02:04:59  Jun 15 02:04:59  root
 218.188.2.4                               12        Jun 15 12:12:34  Jun 15 12:13:20
 ...
+
+$ poc-logids -file /var/log/auth.log -follow
+Watching /var/log/auth.log for new activity (threshold=5, window=1m0s)... press Ctrl+C to stop
+[ALERT] Jul 17 22:41:03  source=203.0.113.7  attempts=5  users=root
 ```
 
 Run against [loghub](https://github.com/logpai/loghub)'s real Linux syslog sample (`resources/loghub-linux/`) — genuine production data, not synthetic.
@@ -24,23 +28,21 @@ Run against [loghub](https://github.com/logpai/loghub)'s real Linux syslog sampl
 
 ```
 go build -o poc-logids ./cmd/poc-logids
-./poc-logids -file <path> [-json] [-threshold N] [-window 60s]
+./poc-logids -file <path> [-json] [-threshold N] [-window 60s] [-follow]
 ```
 
 - `-threshold` (default 5) — minimum failed attempts from one source to flag as brute-force.
 - `-window` (default 60s) — max gap allowed between consecutive attempts for them to count as the same burst.
-- `-json` — JSON output instead of the table.
-
-## Planned functionality
-
-- Live-tail mode (`fsnotify`-based file watching) for near-real-time detection on a growing log file, including logrotate-safe handling.
+- `-json` — JSON output instead of the table/one-line format.
+- `-follow` — after the initial scan, keep watching the file and print each new alert as soon as it's detected (Ctrl+C to stop). Unlike the batch scan, which reports a burst only once it's fully over, `-follow` alerts the instant a burst first crosses `-threshold`, since waiting for an in-progress attack to stop before reporting it defeats the point of live monitoring.
 
 ## Repo structure
 
 - `cmd/poc-logids/` — CLI entry point
 - `internal/parser/` — extracts failed SSH auth events from log lines (syslog `pam_unix` and modern OpenSSH formats)
-- `internal/detector/` — flags brute-force bursts per source
-- `internal/output/` — JSON / ASCII table rendering
+- `internal/detector/` — flags brute-force bursts per source (batch mode, and a streaming variant for `-follow`)
+- `internal/output/` — JSON / ASCII table / one-line rendering
+- `internal/tail/` — `fsnotify`-based file following for `-follow`, handling log rotation
 - `resources/` — supporting/reference materials (non-code), including real-world log samples
 
 ## Tech stack

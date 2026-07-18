@@ -10,9 +10,33 @@ import (
 	"github.com/tahovig/poc-logids/internal/detector"
 )
 
-// ToJSON renders alerts as indented JSON.
+// ToJSON renders alerts as indented JSON. A nil/empty slice renders
+// as "[]", not "null", so consumers don't need to special-case it.
 func ToJSON(alerts []detector.Alert) ([]byte, error) {
+	if alerts == nil {
+		alerts = []detector.Alert{}
+	}
 	return json.MarshalIndent(alerts, "", "  ")
+}
+
+// ToJSONLine renders a single alert as compact JSON, suited to
+// live-tail mode where alerts arrive one at a time and each line of
+// output should be independently valid JSON (composable with tools
+// like jq, one alert per line).
+func ToJSONLine(a detector.Alert) ([]byte, error) {
+	return json.Marshal(a)
+}
+
+// ToLine renders a single alert as a one-line human-readable summary,
+// suited to live-tail mode where alerts arrive one at a time rather
+// than as a batch table.
+func ToLine(a detector.Alert) string {
+	users := "-"
+	if len(a.Users) > 0 {
+		users = strings.Join(a.Users, ",")
+	}
+	return fmt.Sprintf("[ALERT] %s  source=%s  attempts=%d  users=%s",
+		a.LastSeen.Format(tableTimeLayout), a.Source, a.Attempts, users)
 }
 
 const tableTimeLayout = "Jan _2 15:04:05"
