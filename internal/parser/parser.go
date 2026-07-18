@@ -17,11 +17,8 @@ type AuthFailureEvent struct {
 }
 
 // syslogTimeLayout has no year field, matching real syslog/auth.log
-// output. Parsed timestamps land in year 0, so ordering and duration
-// math are only valid within a single log that doesn't cross a
-// Dec 31 -> Jan 1 boundary — an accepted limitation given brute-force
-// detection windows operate on a seconds-to-minutes scale, far
-// shorter than a year.
+// output. Parser.resolveYear infers a consistent year across a
+// Dec 31 -> Jan 1 boundary; see its doc comment.
 const syslogTimeLayout = "Jan _2 15:04:05"
 
 var (
@@ -44,11 +41,29 @@ var (
 	formats = []*regexp.Regexp{pamUnixRe, openSSHRe}
 )
 
+// Parser extracts failed-auth events from a sequence of log lines,
+// inferring a consistent year across a Dec 31 -> Jan 1 boundary as it
+// goes (see resolveYear). Because that inference depends on seeing
+// lines in chronological order, a single Parser must be used across
+// an entire file or stream — not recreated per line — and lines must
+// be fed to it in the order they appear in the log (true of any
+// real, append-only log file).
+type Parser struct {
+	year      int
+	lastMonth time.Month
+	started   bool
+}
+
+// NewParser creates a Parser ready to process a new file or stream.
+func NewParser() *Parser {
+	return &Parser{}
+}
+
 // ParseLine attempts to extract a failed-auth event from a single log
 // line. Most lines in a real auth log are unrelated to SSH auth
 // failures (session open/close, cron, logrotate, ...) — ok is false
 // for those, which is the normal case, not an error.
-func ParseLine(line string) (event AuthFailureEvent, ok bool) {
+func (p *Parser) ParseLine(line string) (event AuthFailureEvent, ok bool) {
 	for _, re := range formats {
 		match := re.FindStringSubmatch(line)
 		if match == nil {
@@ -56,19 +71,39 @@ func ParseLine(line string) (event AuthFailureEvent, ok bool) {
 		}
 		groups := namedGroups(re, match)
 
-		ts, err := time.Parse(syslogTimeLayout, groups["ts"])
+		raw, err := time.Parse(syslogTimeLayout, groups["ts"])
 		if err != nil {
 			continue
 		}
 
 		return AuthFailureEvent{
-			Timestamp: ts,
+			Timestamp: p.resolveYear(raw),
 			Source:    groups["source"],
 			User:      groups["user"],
 			Raw:       line,
 		}, true
 	}
 	return AuthFailureEvent{}, false
+}
+
+// resolveYear assigns a consistent, monotonically increasing year to
+// an otherwise year-less syslog timestamp. The first line seen
+// anchors year 0 (a placeholder, not a real calendar year -- classic
+// syslog format simply doesn't carry that information, and display
+// formatting never shows it); each later line whose month is earlier
+// than the previous line's month is assumed to have crossed a
+// Dec -> Jan boundary and gets the next year. A spurious one-off
+// out-of-order line (e.g. two processes' entries interleaved within
+// the same second) can't trigger this by accident -- that would take
+// an entire month's difference, not ordinary jitter.
+func (p *Parser) resolveYear(raw time.Time) time.Time {
+	month := raw.Month()
+	if p.started && month < p.lastMonth {
+		p.year++
+	}
+	p.started = true
+	p.lastMonth = month
+	return time.Date(p.year, month, raw.Day(), raw.Hour(), raw.Minute(), raw.Second(), 0, time.UTC)
 }
 
 func namedGroups(re *regexp.Regexp, match []string) map[string]string {

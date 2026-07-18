@@ -35,7 +35,8 @@ func main() {
 
 	cfg := detector.Config{Threshold: *threshold, Window: *window}
 
-	events, offset, err := scanFile(*filePath)
+	p := parser.NewParser()
+	events, offset, err := scanFile(*filePath, p)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -50,16 +51,20 @@ func main() {
 		return
 	}
 
-	if err := runFollow(*filePath, offset, cfg, *jsonOut); err != nil {
+	// Reuse the same parser (not a fresh one) so year inference
+	// carries over: it depends on having seen every line since the
+	// start of the file in order, and -follow continues that same
+	// chronological stream rather than starting a new one.
+	if err := runFollow(*filePath, offset, p, cfg, *jsonOut); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// scanFile parses every failed-auth event in path and reports the
-// byte offset it stopped at, so a subsequent live-tail (if any) can
-// resume from exactly that point with no gap or overlap.
-func scanFile(path string) (events []parser.AuthFailureEvent, offset int64, err error) {
+// scanFile parses every failed-auth event in path using p and
+// reports the byte offset it stopped at, so a subsequent live-tail
+// (if any) can resume from exactly that point with no gap or overlap.
+func scanFile(path string, p *parser.Parser) (events []parser.AuthFailureEvent, offset int64, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("opening %s: %w", path, err)
@@ -69,7 +74,7 @@ func scanFile(path string) (events []parser.AuthFailureEvent, offset int64, err 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		if event, ok := parser.ParseLine(scanner.Text()); ok {
+		if event, ok := p.ParseLine(scanner.Text()); ok {
 			events = append(events, event)
 		}
 	}
@@ -86,7 +91,7 @@ func scanFile(path string) (events []parser.AuthFailureEvent, offset int64, err 
 
 // runFollow watches path for new activity starting at startOffset,
 // printing each alert as soon as it's detected, until interrupted.
-func runFollow(path string, startOffset int64, cfg detector.Config, jsonOut bool) error {
+func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Config, jsonOut bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -104,7 +109,7 @@ func runFollow(path string, startOffset int64, cfg detector.Config, jsonOut bool
 			fmt.Fprintf(os.Stderr, "warning: %v\n", line.Err)
 			continue
 		}
-		event, ok := parser.ParseLine(line.Text)
+		event, ok := p.ParseLine(line.Text)
 		if !ok {
 			continue
 		}

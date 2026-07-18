@@ -11,18 +11,20 @@ Second in a series of portfolio projects supporting a pivot from software engine
 Full pipeline works: scan an auth.log-style file for SSH brute-force bursts, then optionally keep watching it live (`-follow`, `tail -f`-style) and alert on new activity as it happens — including through log rotation (rename+recreate or in-place truncation).
 
 ```
-$ poc-logids -file resources/loghub-linux/Linux_2k.log
-SOURCE                                    ATTEMPTS  FIRST SEEN       LAST SEEN        USERS TRIED
-220-135-151-1.hinet-ip.hinet.net          10        Jun 15 02:04:59  Jun 15 02:04:59  root
-218.188.2.4                               12        Jun 15 12:12:34  Jun 15 12:13:20
+$ poc-logids -file resources/loghub-linux/Linux.log
+SOURCE                                               ATTEMPTS  FIRST SEEN       LAST SEEN        USERS TRIED
+unknown.sagonet.net                                  23        Jun 11 09:45:45  Jun 11 09:46:48  root
+218.188.2.4                                          11        Jun 12 01:12:13  Jun 12 01:12:27  test
+218.38.14.205                                        13        Jun 12 14:10:40  Jun 12 14:10:54
 ...
+(327 alerts total, spanning the full 263.9-day dataset)
 
 $ poc-logids -file /var/log/auth.log -follow
 Watching /var/log/auth.log for new activity (threshold=5, window=1m0s)... press Ctrl+C to stop
 [ALERT] Jul 17 22:41:03  source=203.0.113.7  attempts=5  users=root
 ```
 
-Run against [loghub](https://github.com/logpai/loghub)'s real Linux syslog sample (`resources/loghub-linux/`) — genuine production data, not synthetic.
+Run against [loghub](https://github.com/logpai/loghub)'s full real Linux syslog dataset (`resources/loghub-linux/`) — genuine production data spanning 263.9 days, not synthetic. The dataset genuinely crosses a calendar year boundary, which is why the parser infers a consistent year across `Dec 31 -> Jan 1` (see `internal/parser`) rather than assuming everything happened in the same year.
 
 ## Usage
 
@@ -39,7 +41,7 @@ go build -o poc-logids ./cmd/poc-logids
 ## Repo structure
 
 - `cmd/poc-logids/` — CLI entry point
-- `internal/parser/` — extracts failed SSH auth events from log lines (syslog `pam_unix` and modern OpenSSH formats)
+- `internal/parser/` — extracts failed SSH auth events from log lines (syslog `pam_unix` and modern OpenSSH formats), inferring a consistent year across a Dec 31 -> Jan 1 boundary since syslog timestamps don't carry one
 - `internal/detector/` — flags brute-force bursts per source (batch mode, and a streaming variant for `-follow`)
 - `internal/output/` — JSON / ASCII table / one-line rendering
 - `internal/tail/` — `fsnotify`-based file following for `-follow`, handling log rotation

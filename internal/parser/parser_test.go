@@ -70,7 +70,7 @@ func TestParseLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event, ok := ParseLine(tt.line)
+			event, ok := NewParser().ParseLine(tt.line)
 			if ok != tt.wantOK {
 				t.Fatalf("ParseLine(%q) ok = %v, want %v", tt.line, ok, tt.wantOK)
 			}
@@ -94,5 +94,102 @@ func TestParseLine(t *testing.T) {
 				t.Errorf("Raw = %q, want %q", event.Raw, tt.line)
 			}
 		})
+	}
+}
+
+func TestParser_YearIncrementsOnDecToJanWrap(t *testing.T) {
+	p := NewParser()
+	lines := []string{
+		"Dec 30 23:58:00 combo sshd[1]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Dec 31 23:59:58 combo sshd[2]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Jan  1 00:00:02 combo sshd[3]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Jan  2 08:00:00 combo sshd[4]: Failed password for root from 1.2.3.4 port 22 ssh2",
+	}
+
+	var events []AuthFailureEvent
+	for _, line := range lines {
+		e, ok := p.ParseLine(line)
+		if !ok {
+			t.Fatalf("ParseLine(%q) unexpectedly failed to match", line)
+		}
+		events = append(events, e)
+	}
+
+	if events[0].Timestamp.Year() != events[1].Timestamp.Year() {
+		t.Errorf("Dec 30 and Dec 31 should share a year, got %d and %d",
+			events[0].Timestamp.Year(), events[1].Timestamp.Year())
+	}
+	if events[2].Timestamp.Year() != events[0].Timestamp.Year()+1 {
+		t.Errorf("Jan 1 should be one year after Dec 30/31, got Dec=%d Jan=%d",
+			events[0].Timestamp.Year(), events[2].Timestamp.Year())
+	}
+	if events[3].Timestamp.Year() != events[2].Timestamp.Year() {
+		t.Errorf("Jan 1 and Jan 2 should share a year, got %d and %d",
+			events[2].Timestamp.Year(), events[3].Timestamp.Year())
+	}
+
+	// The real point of year inference: the gap across the wrap must
+	// come out as ~4 seconds (23:59:58 -> 00:00:02), not ~-364 days.
+	gap := events[2].Timestamp.Sub(events[1].Timestamp)
+	if gap != 4*time.Second {
+		t.Errorf("gap across the year wrap = %v, want 4s", gap)
+	}
+
+	// And the full sequence must be strictly increasing, so sorting
+	// and windowed chaining work correctly across the boundary.
+	for i := 1; i < len(events); i++ {
+		if !events[i].Timestamp.After(events[i-1].Timestamp) {
+			t.Errorf("events[%d] (%v) not after events[%d] (%v)",
+				i, events[i].Timestamp, i-1, events[i-1].Timestamp)
+		}
+	}
+}
+
+func TestParser_NoWrapWithinSameYear(t *testing.T) {
+	p := NewParser()
+	lines := []string{
+		"Jan  5 00:00:00 combo sshd[1]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Jun 15 00:00:00 combo sshd[2]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Dec 31 00:00:00 combo sshd[3]: Failed password for root from 1.2.3.4 port 22 ssh2",
+	}
+
+	var years []int
+	for _, line := range lines {
+		e, ok := p.ParseLine(line)
+		if !ok {
+			t.Fatalf("ParseLine(%q) unexpectedly failed to match", line)
+		}
+		years = append(years, e.Timestamp.Year())
+	}
+
+	if years[0] != years[1] || years[1] != years[2] {
+		t.Errorf("months increasing within one calendar year should not increment the year, got %v", years)
+	}
+}
+
+func TestParser_MultipleWraps(t *testing.T) {
+	p := NewParser()
+	lines := []string{
+		"Dec 31 00:00:00 combo sshd[1]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Jan  1 00:00:00 combo sshd[2]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Dec 31 00:00:00 combo sshd[3]: Failed password for root from 1.2.3.4 port 22 ssh2",
+		"Jan  1 00:00:00 combo sshd[4]: Failed password for root from 1.2.3.4 port 22 ssh2",
+	}
+
+	var years []int
+	for _, line := range lines {
+		e, ok := p.ParseLine(line)
+		if !ok {
+			t.Fatalf("ParseLine(%q) unexpectedly failed to match", line)
+		}
+		years = append(years, e.Timestamp.Year())
+	}
+
+	want := []int{years[0], years[0] + 1, years[0] + 1, years[0] + 2}
+	for i := range years {
+		if years[i] != want[i] {
+			t.Errorf("years = %v, want %v", years, want)
+			break
+		}
 	}
 }

@@ -77,12 +77,30 @@ Added `github.com/fsnotify/fsnotify` (only external dependency so far) and a new
 
 Fast-forward merge (`git merge --ff-only develop`), same pattern as every `poc-osint` round — `main` had no divergent commits, so this was a clean linear fast-forward, no merge commit. Pushed and confirmed green on GitHub for `main` directly (not just `develop`), which also flips the README CI badge (`?branch=main`) green. `develop` remains the active working branch, same convention as `poc-osint`.
 
+## Full loghub dataset swapped in, year-inference fixed first
+
+Decided to swap the vendored 2k-line sample for the full loghub Linux dataset (263.9 days, 25,567 lines, 2.25 MiB — confirmed real via a direct Zenodo download, `https://zenodo.org/records/8196385/files/Linux.tar.gz?download=1`, HTTP 200, contents match the stated size/line count exactly). Trivial to vendor (232KB compressed).
+
+**Investigation before swapping**: the full dataset genuinely crosses a calendar year boundary (file order is strictly `Jun→Jul→...→Dec→Jan→Feb`, one clean wrap) — directly exercising the year-less-timestamp limitation that had only ever been a documented theoretical concern (the 2k sample spans ~6 weeks, no wraparound). Checked how bad it was concretely before deciding anything: no source IP had activity within a week of the actual Dec 31/Jan 1 boundary (a real ~1-week logging gap over that period in this specific file), so the *first* run against the full dataset (before fixing anything) didn't corrupt detection — its only symptom was cosmetic (January alerts sorting before June ones, since both parsed to year 0000). Reported this clearly to the user rather than silently picking a path.
+
+**User's call**: swap in the full dataset, but fix year-inference properly first rather than ship with a known-but-dormant bug just because this particular file happens not to trigger the worst case.
+
+**`internal/parser` reworked from a stateless free function to a stateful `Parser`** (`NewParser()` + `(p *Parser) ParseLine(...)`, replacing the old package-level `ParseLine`): standard syslog year-inference heuristic — process lines in file/stream order (true of any real append-only log), increment an internal year counter whenever a line's month is earlier than the previous line's month (only a genuine Dec→Jan wrap can trigger this; ordinary jitter/interleaving never spans a full month). First line anchors year 0 — an explicit placeholder, not a real calendar year, since classic syslog format simply doesn't carry that information; display formatting never shows the year anyway, only JSON output does (as the placeholder integer).
+
+Because year-inference depends on state carried across the whole stream, **one `Parser` instance must be reused end-to-end**: `cmd/poc-logids/main.go`'s `scanFile` now takes a `*parser.Parser` instead of calling a free function, and `main()` passes that *same* parser into `runFollow` for `-follow`, so year-tracking continuity holds across the batch-scan-to-live-tail transition rather than resetting.
+
+3 new tests (`TestParser_YearIncrementsOnDecToJanWrap` — asserts the gap across a real wrap computes as ~4s, not ~-364 days, which is the actual point; `TestParser_NoWrapWithinSameYear`; `TestParser_MultipleWraps`). 30 tests total now.
+
+**Verified end-to-end against the real full dataset**: before the fix, alerts list started with `Jan 7` (wrong — file starts in June). After the fix, rebuilt and reran — alerts correctly start with `Jun 11`, and `-json` output shows two consecutive placeholder years (`0000` then `0001`) spanning the wrap. Same 327 total alerts before and after (expected, confirms the fix corrected *ordering* without changing *detection* — consistent with the earlier finding that no real chain in this file straddles the boundary).
+
+`resources/loghub-linux/Linux_2k.log` replaced with `Linux.log` (full dataset); `resources/loghub-linux/README.md` and the main README's example output updated to match (using real captured output from the full-dataset run, not fabricated).
+
 ## Open decisions for the next session
 
-1. **Full loghub dataset vs. 2k sample** — currently only the 2,000-line sample is vendored; decide whether to fetch the full 263.9-day dataset (via Zenodo) for a more thorough demo, or whether the sample is sufficient.
-2. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
-3. **README/CLAUDE.md real-world `-follow` demo** — the README's `-follow` example output is illustrative, not a captured real run; consider recording one against a real or synthetic growing file for the README, similar to how `poc-osint` considered (but ultimately skipped) a terminal-recording GIF.
-4. **Portfolio-readiness pass** — core detection + live-tail + CI are all in place and merged to `main`; worth doing a pass similar to `poc-osint`'s (LICENSE, repo description/topics, README polish) to confirm what's actually left before this is portfolio-ready.
+1. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
+2. **README/CLAUDE.md real-world `-follow` demo** — the README's `-follow` example output is illustrative, not a captured real run; consider recording one against a real or synthetic growing file for the README, similar to how `poc-osint` considered (but ultimately skipped) a terminal-recording GIF.
+3. **Portfolio-readiness pass** — core detection + live-tail + CI + real full-dataset demo are all in place; worth doing a pass similar to `poc-osint`'s (LICENSE, repo description/topics, README polish) to confirm what's actually left before this is portfolio-ready.
+4. **Merge `develop` into `main` again** — the year-inference fix and dataset swap are only on `develop` so far; `main` still has the pre-fix version.
 
 ## Working preferences (carried over from `poc-osint`)
 
