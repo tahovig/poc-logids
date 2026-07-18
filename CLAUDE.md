@@ -126,9 +126,31 @@ User feedback after running against the real full dataset: the table output was 
 
 Fast-forward merge, same pattern as every round — `main` had no divergent commits. Pushed and confirmed green on GitHub for `main` directly.
 
+## Real honeypot deployment — droplet up and hardened, `-follow` not yet running
+
+Follow-up to the earlier data-source discussion (see "Scope" above), where a real internet-facing SSH box was set aside as a stretch goal in favor of the loghub dataset. Revisited once the user reviewed real detection output and wanted to watch live activity accumulate over days, not just analyze a static file.
+
+**Infra**: DigitalOcean droplet `poc-logids-honeypot` (ID `585582241`), `45.55.223.105`, NYC3, `s-1vcpu-512mb-10gb` (~$4/mo), Ubuntu 22.04. Created via `doctl` (installed to `~/.local/bin`, no `sudo` needed — same user-local pattern as the Go toolchain install). Dedicated SSH key `~/.ssh/poc-logids-honeypot` (not the pre-existing `id_rsa` — don't reuse keys across systems).
+
+**Note on the API token**: user pasted the DigitalOcean API token directly into chat. Used it to auth `doctl`, but flagged that a token which has touched a chat transcript should be treated as exposed and rotated (revoke + regenerate) once setup is done, per DigitalOcean's own guidance — not yet confirmed done, worth checking next session.
+
+**Hardening applied** (script written to the scratchpad dir — NOT `/tmp` directly, which the permission classifier blocked; scratchpad worked fine):
+- Non-root sudo user `poclogids` created, password locked (`passwd -l`, matches root's own already-locked-by-default state on DO images), passwordless `sudo` via `/etc/sudoers.d/poclogids` (necessary since there's no password to authenticate sudo with otherwise — same pattern cloud-init uses for default users), `adm` group membership so it can read `/var/log/auth.log` without root.
+- `sshd_config`: `PermitRootLogin prohibit-password` (root stays key-only), `PasswordAuthentication yes` **kept on deliberately** — this is what makes bots' password attempts actually produce "Failed password for ..." log lines; disabling it would silence the exact signal the honeypot exists to capture.
+- `ufw`: only `22/tcp` (v4 and v6) allowed, enabled.
+- `unattended-upgrades`: already present on the DO image, confirmed enabled.
+- Deliberately no fail2ban (per the original spec) — would ban attacker IPs after a few failures, cutting short the bursts we want to observe; safe to skip since no account has a usable password for anything to actually win.
+- Verified end-to-end: SSH'd in as `poclogids` with the dedicated key, confirmed passwordless `sudo`, confirmed `adm` group read access to `/var/log/auth.log`.
+
+## Open decisions for the next session
+
+1. **Deploy `poc-logids` to the droplet and start `-follow`** — cross-compile locally (`GOOS=linux GOARCH=amd64`), `scp` over, set up as a systemd unit (see the earlier spec in conversation) so it survives reboots and disconnects. Not yet done.
+2. **Rotate the DigitalOcean API token** — see note above.
+3. **Periodic review cadence** — once `-follow` is running, decide how often to pull the JSON-lines alert log back for review (the whole point is watching it accumulate over days).
+
 ## Current overall state
 
-Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, severity-based visual triage (color + worst-first sort + rate), CI, and a portfolio-readiness pass are all complete and merged to `main`. No open decisions queued right now — next session should start with the user's direction rather than resuming a punch list.
+Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, severity-based visual triage (color + worst-first sort + rate), CI, and a portfolio-readiness pass are all complete and merged to `main`. A real honeypot droplet is provisioned and hardened but not yet running `poc-logids` itself — see above.
 
 ## Working preferences (carried over from `poc-osint`)
 
