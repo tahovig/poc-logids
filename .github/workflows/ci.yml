@@ -15,7 +15,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          # No go.sum yet (zero dependencies) for the cache to key on;
+          # flip to true once fsnotify (or anything else) is added.
+          cache: false
 
       - name: Check formatting
         run: |
