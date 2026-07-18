@@ -50,12 +50,20 @@ Go toolchain: installed Go 1.26.5 from the official tarball to `~/.local/go` (Ub
 - **Verified end-to-end against real data**: built the binary and ran it against `resources/loghub-linux/Linux_2k.log` (real production syslog, not synthetic) — 41 genuine brute-force bursts detected at default thresholds, table and `-json` output both confirmed, missing-`-file` error path confirmed. This run is what surfaced the burst-fragmentation bug above.
 - `resources/loghub-linux/Linux_2k.log` — vendored real loghub sample (2,000 lines) + `README.md` noting source/license/fetch date, per the data-source decision above.
 
+## CI — built
+
+`.github/workflows/ci.yml` — single `build-test` job on `push`/`pull_request` to `main`/`develop`: `actions/setup-go@v5` (version pinned via `go-version-file: go.mod`, dependency cache disabled for now — no `go.sum` yet since there are zero external dependencies), `gofmt -l` check, `go vet ./...`, `go build ./...`, `go test ./... -v`.
+
+Deliberately no version matrix, unlike `poc-osint`'s Python 3.11/3.12 matrix: `go.mod` already pins a minimum Go version (1.26.5), so an older-version matrix entry would just fail on that floor rather than catch a genuine compatibility gap. Also no second (integration) job — there's no live target or Docker fixture here, since the real demo data is a vendored static file, not something fetched at test time.
+
+**Confirmed green on GitHub**: `gh run watch` on two consecutive pushes — the first surfaced a noisy-but-harmless "Restore cache failed" annotation (no `go.sum` for the cache step to key on), fixed by disabling the cache; the second run is fully clean except an unrelated upstream Node.js 20 deprecation notice from the action runtimes themselves (`actions/checkout`, `actions/setup-go`) — not something in our control, will resolve when those actions bump their major version. README CI badge added, pointing at `main` (will go green once `develop` is merged there).
+
 ## Open decisions for the next session
 
 1. **Live-tail mode** — `fsnotify`-based watching of a growing file, including logrotate-safe handling (documented as planned in the README, not yet built).
-2. **CI** — GitHub Actions workflow (`go build`, `go vet`, `go test ./...`) not yet set up; `poc-osint` has a two-job pattern (`unit` + `integration`) worth referencing, though this project likely only needs one job given no Docker fixtures yet.
-3. **Full loghub dataset vs. 2k sample** — currently only the 2,000-line sample is vendored; decide whether to fetch the full 263.9-day dataset (via Zenodo) for a more thorough demo, or whether the sample is sufficient.
-4. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
+2. **Full loghub dataset vs. 2k sample** — currently only the 2,000-line sample is vendored; decide whether to fetch the full 263.9-day dataset (via Zenodo) for a more thorough demo, or whether the sample is sufficient.
+3. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
+4. **Merging `develop` into `main`** — not yet done; `main` still only has the initial scaffold commit. Worth doing once there's a natural checkpoint (e.g. after live-tail, or after a portfolio-readiness pass like `poc-osint` did).
 
 ## Working preferences (carried over from `poc-osint`)
 
