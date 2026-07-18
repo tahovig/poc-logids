@@ -95,12 +95,22 @@ Because year-inference depends on state carried across the whole stream, **one `
 
 `resources/loghub-linux/Linux_2k.log` replaced with `Linux.log` (full dataset); `resources/loghub-linux/README.md` and the main README's example output updated to match (using real captured output from the full-dataset run, not fabricated).
 
+## Portfolio-readiness pass
+
+Mirrors `poc-osint`'s pass, once its core pieces were in place. Audited and fixed:
+
+- **Added `LICENSE`** (MIT, copyright Theodore Hovig 2026) — identical to `poc-osint`'s, repo had none.
+- **GitHub repo description and topics were both unset** (confirmed via `gh repo view` — `description: ""`, `repositoryTopics: null`). Set description ("Go CLI that detects SSH brute-force activity in auth logs, with live-tail monitoring for real-time alerts. Cybersecurity engineering portfolio project.") and topics (`cybersecurity`, `golang`, `security-tools`, `intrusion-detection`, `log-analysis`, `blue-team`), styled consistently with `poc-osint`'s own description/topics.
+- **CI badge** — already correctly pointed at `?branch=main` from the start this time (a mistake `poc-osint` made and had to fix in its own portfolio-readiness pass); nothing to do here.
+- **README `-follow` example was illustrative text, not a real run** — recaptured for real: built the binary, ran `poc-logids -follow` against a genuinely empty file inside a `script(1)` session while appending 5 real failed-login lines live (one every ~0.3s), and used the actual captured terminal output instead. The batch-scan example was already real (copied from an actual run against the full dataset earlier), just clarified in the README which parts are verbatim vs. trimmed/annotated.
+- **Added a "How it works" section** surfacing the non-obvious engineering decisions that would otherwise be invisible in the repo: year inference, the copytruncate race fix, why `-follow` alerts immediately instead of waiting for a burst to end, and the real-vs-synthetic data split — same purpose as `poc-osint`'s "How it works" section calling out its crt.sh Postgres fallback.
+- **Not needed here, unlike `poc-osint`**: no "Authorized use only" section — this tool only reads log files already on disk that the user has access to, no active network operations against third parties, so there's no equivalent ethics/scope concern to document.
+- **Considered, not done**: a terminal-recording GIF/SVG for the README — same call `poc-osint` made, real captured text output is accurate and keeps the project dependency-light.
+- `resources/` already had a real `README.md` (not a bare `.gitkeep` like `poc-osint`'s initial state) — nothing to fix there.
+
 ## Open decisions for the next session
 
-1. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
-2. **README/CLAUDE.md real-world `-follow` demo** — the README's `-follow` example output is illustrative, not a captured real run; consider recording one against a real or synthetic growing file for the README, similar to how `poc-osint` considered (but ultimately skipped) a terminal-recording GIF.
-3. **Portfolio-readiness pass** — core detection + live-tail + CI + real full-dataset demo are all in place; worth doing a pass similar to `poc-osint`'s (LICENSE, repo description/topics, README polish) to confirm what's actually left before this is portfolio-ready.
-4. **Merge `develop` into `main` again** — the year-inference fix and dataset swap are only on `develop` so far; `main` still has the pre-fix version.
+1. **Merge `develop` into `main` again** — the year-inference fix, dataset swap, and this portfolio-readiness pass are only on `develop` so far; `main` still has the pre-fix version. User explicitly asked to hold off on this for now (as of the year-inference/dataset-swap round) — check before merging.
 
 ## Working preferences (carried over from `poc-osint`)
 
