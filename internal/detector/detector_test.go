@@ -144,3 +144,45 @@ func TestDetect_NoEvents(t *testing.T) {
 		t.Fatalf("got %d alerts, want 0", len(alerts))
 	}
 }
+
+func TestSeverity_ScalesWithThreshold(t *testing.T) {
+	tests := []struct {
+		attempts  int
+		threshold int
+		want      Severity
+	}{
+		{attempts: 5, threshold: 5, want: SeverityNormal},
+		{attempts: 9, threshold: 5, want: SeverityNormal},
+		{attempts: 10, threshold: 5, want: SeverityWarning},
+		{attempts: 19, threshold: 5, want: SeverityWarning},
+		{attempts: 20, threshold: 5, want: SeverityCritical},
+		{attempts: 100, threshold: 5, want: SeverityCritical},
+		// Same ratios, different threshold: tiers must scale with
+		// -threshold, not use an absolute attempt count.
+		{attempts: 10, threshold: 10, want: SeverityNormal},
+		{attempts: 20, threshold: 10, want: SeverityWarning},
+		{attempts: 40, threshold: 10, want: SeverityCritical},
+	}
+	for _, tt := range tests {
+		got := severity(tt.attempts, tt.threshold)
+		if got != tt.want {
+			t.Errorf("severity(%d, %d) = %v, want %v", tt.attempts, tt.threshold, got, tt.want)
+		}
+	}
+}
+
+func TestDetect_AlertCarriesSeverity(t *testing.T) {
+	cfg := Config{Threshold: 5, Window: 60 * time.Second}
+	var events []parser.AuthFailureEvent
+	for i := 0; i < 20; i++ {
+		events = append(events, ev("10.0.0.1", "root", at(i)))
+	}
+
+	alerts := Detect(events, cfg)
+	if len(alerts) != 1 {
+		t.Fatalf("got %d alerts, want 1: %+v", len(alerts), alerts)
+	}
+	if alerts[0].Severity != SeverityCritical {
+		t.Errorf("Severity = %v, want %v (20 attempts at threshold 5 = 4x)", alerts[0].Severity, SeverityCritical)
+	}
+}

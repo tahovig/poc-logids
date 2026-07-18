@@ -38,7 +38,12 @@ func (l *Live) Feed(e parser.AuthFailureEvent) (Alert, bool) {
 
 	if !c.alerted && len(c.events) >= l.cfg.Threshold {
 		c.alerted = true
-		return buildAlert(e.Source, c.events), true
+		// Always fires at exactly Threshold attempts (that's the
+		// point -- report the instant it's crossed, not after), so
+		// Severity here is always SeverityNormal; it exists mainly
+		// for Detect's fully-ended bursts, which can run well past
+		// Threshold before the chain breaks.
+		return buildAlert(e.Source, c.events, l.cfg.Threshold), true
 	}
 	return Alert{}, false
 }

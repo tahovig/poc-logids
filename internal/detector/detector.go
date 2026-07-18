@@ -19,6 +19,32 @@ type Config struct {
 // within 60 seconds from the same source.
 var DefaultConfig = Config{Threshold: 5, Window: 60 * time.Second}
 
+// Severity classifies an Alert by how far past the configured
+// Threshold its attempt count reached, so review can be prioritized
+// without every alert competing for equal attention.
+type Severity string
+
+const (
+	SeverityNormal   Severity = "normal"   // reached Threshold, below 2x
+	SeverityWarning  Severity = "warning"  // reached 2x Threshold, below 4x
+	SeverityCritical Severity = "critical" // reached 4x Threshold
+)
+
+// severity classifies attempts relative to threshold. Scaling off
+// the configured Threshold (rather than a fixed attempt count or
+// rate) means the tiers stay meaningful whatever -threshold is set
+// to, instead of assuming one absolute number fits every deployment.
+func severity(attempts, threshold int) Severity {
+	switch {
+	case attempts >= threshold*4:
+		return SeverityCritical
+	case attempts >= threshold*2:
+		return SeverityWarning
+	default:
+		return SeverityNormal
+	}
+}
+
 // Alert flags a burst of failed authentication attempts from one
 // source that met the configured threshold within the configured
 // window.
@@ -28,6 +54,7 @@ type Alert struct {
 	FirstSeen time.Time
 	LastSeen  time.Time
 	Users     []string // deduped, in order of first appearance
+	Severity  Severity
 }
 
 // Detect groups failed-auth events by source and flags each burst —
@@ -65,14 +92,14 @@ func detectBursts(source string, evs []parser.AuthFailureEvent, cfg Config) []Al
 			continue // still within the same burst chain
 		}
 		if i-start >= cfg.Threshold {
-			alerts = append(alerts, buildAlert(source, evs[start:i]))
+			alerts = append(alerts, buildAlert(source, evs[start:i], cfg.Threshold))
 		}
 		start = i
 	}
 	return alerts
 }
 
-func buildAlert(source string, evs []parser.AuthFailureEvent) Alert {
+func buildAlert(source string, evs []parser.AuthFailureEvent, threshold int) Alert {
 	users := make([]string, 0, len(evs))
 	seen := make(map[string]bool, len(evs))
 	for _, e := range evs {
@@ -88,5 +115,6 @@ func buildAlert(source string, evs []parser.AuthFailureEvent) Alert {
 		FirstSeen: evs[0].Timestamp,
 		LastSeen:  evs[len(evs)-1].Timestamp,
 		Users:     users,
+		Severity:  severity(len(evs), threshold),
 	}
 }

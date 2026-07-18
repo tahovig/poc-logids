@@ -21,6 +21,9 @@ func TestLive_AlertsExactlyOnceAtThreshold(t *testing.T) {
 	if alert.Attempts != 3 || alert.Source != "10.0.0.1" {
 		t.Errorf("alert = %+v, want attempts=3 source=10.0.0.1", alert)
 	}
+	if alert.Severity != SeverityNormal {
+		t.Errorf("Severity = %v, want %v (Live always fires at exactly Threshold)", alert.Severity, SeverityNormal)
+	}
 
 	// Same chain continues; must not alert again.
 	if _, ok := l.Feed(ev("10.0.0.1", "root", at(3))); ok {
