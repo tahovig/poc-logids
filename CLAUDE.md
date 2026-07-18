@@ -108,9 +108,13 @@ Mirrors `poc-osint`'s pass, once its core pieces were in place. Audited and fixe
 - **Considered, not done**: a terminal-recording GIF/SVG for the README — same call `poc-osint` made, real captured text output is accurate and keeps the project dependency-light.
 - `resources/` already had a real `README.md` (not a bare `.gitkeep` like `poc-osint`'s initial state) — nothing to fix there.
 
-## Open decisions for the next session
+## `develop` merged into `main` (again)
 
-1. **Merge `develop` into `main` again** — the year-inference fix, dataset swap, and this portfolio-readiness pass are only on `develop` so far; `main` still has the pre-fix version. User explicitly asked to hold off on this for now (as of the year-inference/dataset-swap round) — check before merging.
+Fast-forward merge, same as the first round — `main` had no divergent commits. Pushed and confirmed green on GitHub for `main` directly. `gh repo view` confirms the MIT license is now detected (`licenseInfo.key: "mit"`). `develop` remains the active working branch.
+
+## Current overall state
+
+Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, CI, and a portfolio-readiness pass are all complete and on `main`. No open decisions queued right now — next session should start with the user's direction rather than resuming a punch list.
 
 ## Working preferences (carried over from `poc-osint`)
 
