@@ -122,9 +122,13 @@ User feedback after running against the real full dataset: the table output was 
 - 9 new tests (5 detector: severity-scaling table test across different thresholds, alert-carries-severity, live-always-normal; 4 output: color-only-when-enabled, normal-never-colored, worst-first-sort-doesn't-mutate-input, line-coloring). 39 tests total.
 - **Verified against the real full dataset in an actual terminal** (not just unit tests) — piping through `head` defeats TTY detection (poc-logids's own stdout becomes a pipe, not a tty, so it correctly emits no color — this tripped up the first verification attempt, worth remembering), so captured full output via `script` instead and inspected the raw file for escape codes: 25 critical (red) rows, 207 warning (yellow), 95 normal (uncolored), sorted strictly worst-first (80, 80, 64, 52, 43, 42, 42, 32, 25, 23...). README's example output updated to this real captured data (replacing the earlier chronologically-sorted, pre-severity example).
 
+## `develop` merged into `main` (third round)
+
+Fast-forward merge, same pattern as every round — `main` had no divergent commits. Pushed and confirmed green on GitHub for `main` directly.
+
 ## Current overall state
 
-Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, severity-based visual triage (color + worst-first sort + rate), CI, and a portfolio-readiness pass are all complete and on `develop` (not yet merged to `main` as of this round — check before assuming `main` is current). No open decisions queued right now — next session should start with the user's direction rather than resuming a punch list.
+Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, severity-based visual triage (color + worst-first sort + rate), CI, and a portfolio-readiness pass are all complete and merged to `main`. No open decisions queued right now — next session should start with the user's direction rather than resuming a punch list.
 
 ## Working preferences (carried over from `poc-osint`)
 
