@@ -36,13 +36,26 @@ Second in a series of portfolio projects supporting a career pivot from software
 
 **CLI framework**: stdlib `flag`, not `cobra` — decided provisionally, to revisit only if the tool ends up needing real subcommands (e.g. `scan` vs. `tail` vs. a future `compare`, mirroring `poc-osint`'s subcommand shape). Starting minimal-dependency, consistent with `poc-osint`'s style.
 
+## Package skeleton — built
+
+Go toolchain: installed Go 1.26.5 from the official tarball to `~/.local/go` (Ubuntu 20.04's `apt` only offers a stale `golang-go 1.13`), added to `PATH` via `~/.bashrc`. No `sudo` available non-interactively in this environment, so it's a user-local install rather than `/usr/local/go`.
+
+**Module layout** — deviated from `poc-osint`'s `code/`-nested src-layout: Go's convention is `go.mod` at the repo root (every Go tool assumes this), so `code/` was dropped as a source container; `resources/` still holds non-code material. Module path `github.com/tahovig/poc-logids`, no external dependencies yet (added once `fsnotify`-based live-tail is built).
+
+- `cmd/poc-logids/main.go` — CLI entry point. Flags: `-file` (required), `-json`, `-threshold` (default 5), `-window` (default 60s, Go duration syntax). Reads the file with a buffered line scanner, parses, detects, renders. Bad/missing `-file` produces a clean stderr message + usage + exit 1, not a panic.
+- `internal/parser/parser.go` — `ParseLine(line string) (AuthFailureEvent, bool)`, pure/no I/O. Two regex formats tried in order: the older `sshd(pam_unix)[pid]: authentication failure; ... rhost=<host>` syslog format (needed for the loghub dataset — `rhost` may be a raw IP or a reverse-DNS hostname, `user=` only present on some lines) and the modern OpenSSH `sshd[pid]: Failed password for (invalid user )?<user> from <ip> port <port> ssh2` format. `ok` is `false` for the many unrelated lines in a real auth log (session open/close, cron, logrotate, the `pam_unix` "check pass; user unknown" precursor line that has no `rhost` and would double-count if matched) — not an error. Syslog timestamps have no year (`Jan _2 15:04:05` layout, parses into year 0000); detection only relies on relative deltas within one log, so this is an accepted, documented limitation, not a bug — would need real handling before ingesting logs spanning a Dec 31 → Jan 1 boundary.
+- `internal/detector/detector.go` — `Detect(events, Config{Threshold, Window}) []Alert`. Groups by source, sorts by timestamp, then chains consecutive attempts into a burst as long as each gap stays within `Window`; a chain flagged if its length reaches `Threshold`. **Bug found via real-data verification, fixed**: an earlier sliding-window version capped each alert at exactly `Threshold` events and restarted the window immediately after crossing it, which fragmented one real 10-attempt burst (loghub data, syslog's 1-second timestamp resolution means several attempts often land on the same second) into two artificial 5-attempt alerts. Rewritten to chain-until-the-burst-actually-ends instead of capping at threshold; regression test (`TestDetect_LongBurstNotFragmented`) added. `DefaultConfig` is 5 attempts / 60s.
+- `internal/output/output.go` — `ToJSON` (indented `encoding/json`) and `ToTable` (column-width-aligned ASCII table, `SOURCE | ATTEMPTS | FIRST SEEN | LAST SEEN | USERS TRIED`) — the terminal/ASCII visualization preference applied from the start rather than retrofitted.
+- 18 tests across all three packages (table-driven), `go vet` clean, all real fixture lines in `parser_test.go` are taken verbatim from the real loghub sample, not invented.
+- **Verified end-to-end against real data**: built the binary and ran it against `resources/loghub-linux/Linux_2k.log` (real production syslog, not synthetic) — 41 genuine brute-force bursts detected at default thresholds, table and `-json` output both confirmed, missing-`-file` error path confirmed. This run is what surfaced the burst-fragmentation bug above.
+- `resources/loghub-linux/Linux_2k.log` — vendored real loghub sample (2,000 lines) + `README.md` noting source/license/fetch date, per the data-source decision above.
+
 ## Open decisions for the next session
 
-1. **Go project structure** — module layout (single `main` package vs. `cmd/` + `internal/`), testing approach (Go's built-in `testing` package, table-driven tests are idiomatic — not yet discussed in detail).
-2. **Parser design specifics** — exact fields to extract from auth-log lines (timestamp, source IP, target user, attempt outcome), and whether to support both the loghub dataset's older `pam_unix` line format and the more common modern OpenSSH format, or pick one canonical shape for v1.
-3. **Brute-force detection thresholds** — what counts as "brute-force" (N failed attempts within T seconds/minutes) — needs concrete default values plus configurability.
-4. **Engineering requirements checklist** — likely mirrors `poc-osint`'s: separate parsing/detection layers for testability, structured output (JSON + human-readable), README with an explicit scope/usage section, CI via GitHub Actions. Not yet explicitly confirmed for this project.
-5. **Package skeleton** — not yet built; `code/` currently has only a `.gitkeep`.
+1. **Live-tail mode** — `fsnotify`-based watching of a growing file, including logrotate-safe handling (documented as planned in the README, not yet built).
+2. **CI** — GitHub Actions workflow (`go build`, `go vet`, `go test ./...`) not yet set up; `poc-osint` has a two-job pattern (`unit` + `integration`) worth referencing, though this project likely only needs one job given no Docker fixtures yet.
+3. **Full loghub dataset vs. 2k sample** — currently only the 2,000-line sample is vendored; decide whether to fetch the full 263.9-day dataset (via Zenodo) for a more thorough demo, or whether the sample is sufficient.
+4. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
 
 ## Working preferences (carried over from `poc-osint`)
 

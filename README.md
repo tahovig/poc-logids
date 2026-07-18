@@ -6,19 +6,40 @@ Second in a series of portfolio projects supporting a pivot from software engine
 
 ## Status
 
-Early-stage scaffold — core functionality not yet implemented.
+Core detection works: parse an auth.log-style file, flag SSH brute-force bursts, output as a table or JSON. Live-tail mode not yet built.
+
+```
+$ poc-logids -file resources/loghub-linux/Linux_2k.log
+SOURCE                                    ATTEMPTS  FIRST SEEN       LAST SEEN        USERS TRIED
+220-135-151-1.hinet-ip.hinet.net          10        Jun 15 02:04:59  Jun 15 02:04:59  root
+218.188.2.4                               12        Jun 15 12:12:34  Jun 15 12:13:20
+...
+```
+
+Run against [loghub](https://github.com/logpai/loghub)'s real Linux syslog sample (`resources/loghub-linux/`) — genuine production data, not synthetic.
+
+## Usage
+
+```
+go build -o poc-logids ./cmd/poc-logids
+./poc-logids -file <path> [-json] [-threshold N] [-window 60s]
+```
+
+- `-threshold` (default 5) — minimum failed attempts from one source to flag as brute-force.
+- `-window` (default 60s) — max gap allowed between consecutive attempts for them to count as the same burst.
+- `-json` — JSON output instead of the table.
 
 ## Planned functionality
 
-- Parse auth.log-style SSH authentication events (syslog format).
-- Detect brute-force patterns: repeated failed-auth attempts from one source within a configurable time window.
 - Live-tail mode (`fsnotify`-based file watching) for near-real-time detection on a growing log file, including logrotate-safe handling.
-- Structured output: JSON and a human-readable table.
 
 ## Repo structure
 
-- `code/` — application source
-- `resources/` — supporting/reference materials (non-code), including test fixtures and real-world log samples
+- `cmd/poc-logids/` — CLI entry point
+- `internal/parser/` — extracts failed SSH auth events from log lines (syslog `pam_unix` and modern OpenSSH formats)
+- `internal/detector/` — flags brute-force bursts per source
+- `internal/output/` — JSON / ASCII table rendering
+- `resources/` — supporting/reference materials (non-code), including real-world log samples
 
 ## Tech stack
 
