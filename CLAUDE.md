@@ -126,7 +126,7 @@ User feedback after running against the real full dataset: the table output was 
 
 Fast-forward merge, same pattern as every round — `main` had no divergent commits. Pushed and confirmed green on GitHub for `main` directly.
 
-## Real honeypot deployment — droplet up and hardened, `-follow` not yet running
+## Real honeypot deployment — droplet up, hardened, `-follow` running as a service
 
 Follow-up to the earlier data-source discussion (see "Scope" above), where a real internet-facing SSH box was set aside as a stretch goal in favor of the loghub dataset. Revisited once the user reviewed real detection output and wanted to watch live activity accumulate over days, not just analyze a static file.
 
@@ -142,15 +142,21 @@ Follow-up to the earlier data-source discussion (see "Scope" above), where a rea
 - Deliberately no fail2ban (per the original spec) — would ban attacker IPs after a few failures, cutting short the bursts we want to observe; safe to skip since no account has a usable password for anything to actually win.
 - Verified end-to-end: SSH'd in as `poclogids` with the dedicated key, confirmed passwordless `sudo`, confirmed `adm` group read access to `/var/log/auth.log`.
 
+**Deployment**: cross-compiled locally (`GOOS=linux GOARCH=amd64 go build`), `scp`'d to the droplet (build artifact never committed — built directly into the repo root once by mistake, immediately `rm`'d rather than risking a stray `git add -A` picking it up). Runs as a systemd service (`/etc/systemd/system/poc-logids.service`, `User=poclogids`, `Restart=on-failure`, `-file /var/log/auth.log -follow -json -quiet-startup`), `StandardOutput`/`StandardError` appended to `/home/poclogids/poc-logids-alerts.jsonl` / `poc-logids.log`. Enabled (survives reboot) and active, confirmed via `systemctl is-enabled`/`is-active`.
+
+**Found a real bug via smoke-testing before trusting it to run unattended for days**: did an honest end-to-end test first — appended 5 synthetic lines to the *real* `/var/log/auth.log` (using the TEST-NET-3 documentation IP range, `203.0.113.7`, so they're unambiguously not real traffic) and confirmed the running service's `fsnotify` watch, `Live` detector, and JSON output all fired correctly within ~2s. That test surfaced a genuine design gap: `-follow` always does a full batch scan and prints it *before* going live -- correct for an interactive one-shot run, but wrong for a persistent service, since every restart (crash, reboot, `Restart=on-failure`) would re-scan the entire growing file from byte 0 and re-print every previously-seen alert into the same appended JSON-lines file, duplicating history each time it restarts. Fixed with a new `-quiet-startup` flag (suppresses only the initial batch *print*, not the scan itself -- offset/year-inference state still computed correctly) rather than shipping the known gap. Verified locally (a 5-line synthetic burst printed without the flag, silently suppressed with it) before redeploying. Synthetic test lines removed from the real `/var/log/auth.log` afterward (`sed` targeting the distinctive test IP only) and the alert/log files cleared, so the box starts clean for real data.
+
+**Operational note discovered along the way**: systemd's `StandardOutput=append:PATH` creates the target file as root (before dropping to `User=poclogids`), so the file ends up `root:root` — the service can still write to it (inherits the already-open fd), but the `poclogids` user can't truncate/delete it directly without `sudo`. Not a problem, just something to remember if managing those files by hand later.
+
 ## Open decisions for the next session
 
-1. **Deploy `poc-logids` to the droplet and start `-follow`** — cross-compile locally (`GOOS=linux GOARCH=amd64`), `scp` over, set up as a systemd unit (see the earlier spec in conversation) so it survives reboots and disconnects. Not yet done.
-2. **Rotate the DigitalOcean API token** — see note above.
-3. **Periodic review cadence** — once `-follow` is running, decide how often to pull the JSON-lines alert log back for review (the whole point is watching it accumulate over days).
+1. **Rotate the DigitalOcean API token** — pasted into chat during setup, should be revoked + regenerated per DigitalOcean's own guidance for any token that's touched a transcript. Not yet confirmed done.
+2. **Periodic review cadence** — `-follow` is now genuinely running and accumulating real data; decide how often to `scp`/`ssh` in and pull `poc-logids-alerts.jsonl` back for review. The whole point was watching real activity build up over days, so this needs to actually happen, not just be technically possible.
+3. **Droplet teardown** — no plan yet for how long to let this run or when to destroy the droplet (`doctl compute droplet delete poc-logids-honeypot`) once it's served its purpose.
 
 ## Current overall state
 
-Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, severity-based visual triage (color + worst-first sort + rate), CI, and a portfolio-readiness pass are all complete and merged to `main`. A real honeypot droplet is provisioned and hardened but not yet running `poc-logids` itself — see above.
+Core detection (SSH brute-force in auth.log), live-tail mode (`-follow`, `fsnotify`, logrotate-safe), year-inference for cross-year logs, severity-based visual triage (color + worst-first sort + rate), CI, and a portfolio-readiness pass are all complete and merged to `main`. A real honeypot droplet is provisioned, hardened, and actively running `poc-logids -follow` as a systemd service, accumulating real attacker data — see above.
 
 ## Working preferences (carried over from `poc-osint`)
 
