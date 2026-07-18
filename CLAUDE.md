@@ -73,12 +73,16 @@ Added `github.com/fsnotify/fsnotify` (only external dependency so far) and a new
 - 33 tests total (`internal/tail` adds 5, covering plain append, a partial line held across two writes, rename-based rotation, in-place truncation, and context-cancel shutdown). `gofmt`/`go vet` clean.
 - **Verified end-to-end for real** (not just unit tests): built the binary, ran it with `-follow` against a real scratch log file in the background, appended a genuine 3-line burst from one IP and confirmed the `[ALERT]` line appeared live; renamed the file away and created a fresh one mid-run (simulating real logrotate) and confirmed a new burst on the rotated-to file was still caught; sent a real `SIGINT` and confirmed the graceful "Stopped watching." shutdown; separately verified `-follow -json` produces one compact JSON object per line. One append-burst test run initially showed no alert — turned out to be a bug in the *test script's* timestamp formatting (`15:20:0201`, embedding a 3-digit pid into the seconds field), not the tool; corrected and reconfirmed.
 
+## `develop` merged into `main`
+
+Fast-forward merge (`git merge --ff-only develop`), same pattern as every `poc-osint` round — `main` had no divergent commits, so this was a clean linear fast-forward, no merge commit. Pushed and confirmed green on GitHub for `main` directly (not just `develop`), which also flips the README CI badge (`?branch=main`) green. `develop` remains the active working branch, same convention as `poc-osint`.
+
 ## Open decisions for the next session
 
 1. **Full loghub dataset vs. 2k sample** — currently only the 2,000-line sample is vendored; decide whether to fetch the full 263.9-day dataset (via Zenodo) for a more thorough demo, or whether the sample is sufficient.
 2. **LICENSE** — not yet added; `poc-osint` added it in a later portfolio-readiness pass rather than the initial scaffold, likely fine to defer here too.
-3. **Merging `develop` into `main`** — not yet done; `main` still only has the initial scaffold commit. Worth doing once there's a natural checkpoint, e.g. after a portfolio-readiness pass like `poc-osint` did (core detection + live-tail + CI are all now in place, so this may be close).
-4. **README/CLAUDE.md real-world `-follow` demo** — the README's `-follow` example output is illustrative, not a captured real run; consider recording one against a real or synthetic growing file for the README, similar to how `poc-osint` considered (but ultimately skipped) a terminal-recording GIF.
+3. **README/CLAUDE.md real-world `-follow` demo** — the README's `-follow` example output is illustrative, not a captured real run; consider recording one against a real or synthetic growing file for the README, similar to how `poc-osint` considered (but ultimately skipped) a terminal-recording GIF.
+4. **Portfolio-readiness pass** — core detection + live-tail + CI are all in place and merged to `main`; worth doing a pass similar to `poc-osint`'s (LICENSE, repo description/topics, README polish) to confirm what's actually left before this is portfolio-ready.
 
 ## Working preferences (carried over from `poc-osint`)
 
