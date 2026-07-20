@@ -22,6 +22,7 @@ import (
 func main() {
 	filePath := flag.String("file", "", "path to an auth-log-style file to scan (required)")
 	jsonOut := flag.Bool("json", false, "output alerts as JSON instead of a table")
+	summary := flag.Bool("summary", false, "output alerts as a plain-English outline instead of a table -- for a reader who isn't a security analyst")
 	threshold := flag.Int("threshold", detector.DefaultConfig.Threshold, "minimum failed attempts from one source to flag as brute-force")
 	window := flag.Duration("window", detector.DefaultConfig.Window, "time window attempts must fall within (e.g. 60s, 5m)")
 	follow := flag.Bool("follow", false, "keep watching the file for new activity after the initial scan, like tail -f")
@@ -30,6 +31,11 @@ func main() {
 
 	if *filePath == "" {
 		fmt.Fprintln(os.Stderr, "error: -file is required")
+		flag.Usage()
+		os.Exit(1)
+	}
+	if *jsonOut && *summary {
+		fmt.Fprintln(os.Stderr, "error: -json and -summary are mutually exclusive")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -44,7 +50,7 @@ func main() {
 	}
 
 	if !*quietStartup {
-		if err := printAlerts(detector.Detect(events, cfg), *jsonOut); err != nil {
+		if err := printAlerts(detector.Detect(events, cfg), *jsonOut, *summary); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -58,7 +64,7 @@ func main() {
 	// carries over: it depends on having seen every line since the
 	// start of the file in order, and -follow continues that same
 	// chronological stream rather than starting a new one.
-	if err := runFollow(*filePath, offset, p, cfg, *jsonOut); err != nil {
+	if err := runFollow(*filePath, offset, p, cfg, *jsonOut, *summary); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -94,7 +100,7 @@ func scanFile(path string, p *parser.Parser) (events []parser.AuthFailureEvent, 
 
 // runFollow watches path for new activity starting at startOffset,
 // printing each alert as soon as it's detected, until interrupted.
-func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Config, jsonOut bool) error {
+func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Config, jsonOut, summary bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -117,7 +123,7 @@ func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Co
 			continue
 		}
 		if alert, ok := live.Feed(event); ok {
-			if err := printLiveAlert(alert, jsonOut); err != nil {
+			if err := printLiveAlert(alert, jsonOut, summary); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			}
 		}
@@ -127,28 +133,34 @@ func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Co
 	return nil
 }
 
-func printAlerts(alerts []detector.Alert, jsonOut bool) error {
-	if jsonOut {
+func printAlerts(alerts []detector.Alert, jsonOut, summary bool) error {
+	switch {
+	case jsonOut:
 		out, err := output.ToJSON(alerts)
 		if err != nil {
 			return err
 		}
 		fmt.Println(string(out))
-		return nil
+	case summary:
+		fmt.Print(output.ToSummary(alerts))
+	default:
+		fmt.Print(output.ToTable(alerts))
 	}
-	fmt.Print(output.ToTable(alerts))
 	return nil
 }
 
-func printLiveAlert(a detector.Alert, jsonOut bool) error {
-	if jsonOut {
+func printLiveAlert(a detector.Alert, jsonOut, summary bool) error {
+	switch {
+	case jsonOut:
 		data, err := output.ToJSONLine(a)
 		if err != nil {
 			return err
 		}
 		fmt.Println(string(data))
-		return nil
+	case summary:
+		fmt.Println(output.ToSummaryLine(a))
+	default:
+		fmt.Println(output.ToLine(a))
 	}
-	fmt.Println(output.ToLine(a))
 	return nil
 }
