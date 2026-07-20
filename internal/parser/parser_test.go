@@ -70,13 +70,17 @@ func TestParseLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event, ok := NewParser().ParseLine(tt.line)
+			events, ok := NewParser().ParseLine(tt.line)
 			if ok != tt.wantOK {
 				t.Fatalf("ParseLine(%q) ok = %v, want %v", tt.line, ok, tt.wantOK)
 			}
 			if !tt.wantOK {
 				return
 			}
+			if len(events) != 1 {
+				t.Fatalf("ParseLine(%q) = %d events, want 1", tt.line, len(events))
+			}
+			event := events[0]
 			if event.Source != tt.wantSource {
 				t.Errorf("Source = %q, want %q", event.Source, tt.wantSource)
 			}
@@ -97,6 +101,69 @@ func TestParseLine(t *testing.T) {
 	}
 }
 
+func TestParseLine_MessageRepeated_ExpandsToNEvents(t *testing.T) {
+	// Real line captured from the honeypot droplet, 2026-07-20: rsyslog
+	// collapsed 4 of 5 real "Failed password" attempts in one
+	// connection into this single summary line.
+	line := "Jul 20 23:13:59 poc-logids-honeypot sshd[31120]: message repeated 4 times: [ Failed password for root from 45.148.10.152 port 40498 ssh2]"
+
+	events, ok := NewParser().ParseLine(line)
+	if !ok {
+		t.Fatalf("ParseLine(%q) ok = false, want true", line)
+	}
+	if len(events) != 4 {
+		t.Fatalf("ParseLine(%q) = %d events, want 4", line, len(events))
+	}
+	wantTS, _ := time.Parse(syslogTimeLayout, "Jul 20 23:13:59")
+	for i, e := range events {
+		if e.Source != "45.148.10.152" {
+			t.Errorf("events[%d].Source = %q, want %q", i, e.Source, "45.148.10.152")
+		}
+		if e.User != "root" {
+			t.Errorf("events[%d].User = %q, want %q", i, e.User, "root")
+		}
+		if !e.Timestamp.Equal(wantTS) {
+			t.Errorf("events[%d].Timestamp = %v, want %v", i, e.Timestamp, wantTS)
+		}
+		if e.Raw != line {
+			t.Errorf("events[%d].Raw = %q, want %q", i, e.Raw, line)
+		}
+	}
+}
+
+func TestParseLine_MessageRepeated_PamUnixBody(t *testing.T) {
+	line := "Jun 15 02:04:59 combo sshd(pam_unix)[20882]: message repeated 2 times: [ authentication failure; logname= uid=0 euid=0 tty=NODEVssh ruser= rhost=218.188.2.4  user=root]"
+
+	events, ok := NewParser().ParseLine(line)
+	if !ok {
+		t.Fatalf("ParseLine(%q) ok = false, want true", line)
+	}
+	if len(events) != 2 {
+		t.Fatalf("ParseLine(%q) = %d events, want 2", line, len(events))
+	}
+	for i, e := range events {
+		if e.Source != "218.188.2.4" || e.User != "root" {
+			t.Errorf("events[%d] = {Source: %q, User: %q}, want {%q, %q}", i, e.Source, e.User, "218.188.2.4", "root")
+		}
+	}
+}
+
+func TestParseLine_MessageRepeated_UnrecognizedInnerBody(t *testing.T) {
+	// A repeated line wrapping a message this parser doesn't otherwise
+	// recognize must be ignored, not guessed at.
+	line := "Jul 20 23:10:00 host sshd[1]: message repeated 3 times: [ Invalid user admin from 1.2.3.4 port 22 ]"
+	if events, ok := NewParser().ParseLine(line); ok {
+		t.Errorf("ParseLine(%q) = %v, true; want ok=false for an unrecognized inner message", line, events)
+	}
+}
+
+func TestParseLine_MessageRepeated_ZeroCountIgnored(t *testing.T) {
+	line := "Jul 20 23:10:00 host sshd[1]: message repeated 0 times: [ Failed password for root from 1.2.3.4 port 22 ssh2]"
+	if events, ok := NewParser().ParseLine(line); ok {
+		t.Errorf("ParseLine(%q) = %v, true; want ok=false for a zero repeat count", line, events)
+	}
+}
+
 func TestParser_YearIncrementsOnDecToJanWrap(t *testing.T) {
 	p := NewParser()
 	lines := []string{
@@ -108,11 +175,11 @@ func TestParser_YearIncrementsOnDecToJanWrap(t *testing.T) {
 
 	var events []AuthFailureEvent
 	for _, line := range lines {
-		e, ok := p.ParseLine(line)
+		es, ok := p.ParseLine(line)
 		if !ok {
 			t.Fatalf("ParseLine(%q) unexpectedly failed to match", line)
 		}
-		events = append(events, e)
+		events = append(events, es[0])
 	}
 
 	if events[0].Timestamp.Year() != events[1].Timestamp.Year() {
@@ -155,11 +222,11 @@ func TestParser_NoWrapWithinSameYear(t *testing.T) {
 
 	var years []int
 	for _, line := range lines {
-		e, ok := p.ParseLine(line)
+		es, ok := p.ParseLine(line)
 		if !ok {
 			t.Fatalf("ParseLine(%q) unexpectedly failed to match", line)
 		}
-		years = append(years, e.Timestamp.Year())
+		years = append(years, es[0].Timestamp.Year())
 	}
 
 	if years[0] != years[1] || years[1] != years[2] {
@@ -178,11 +245,11 @@ func TestParser_MultipleWraps(t *testing.T) {
 
 	var years []int
 	for _, line := range lines {
-		e, ok := p.ParseLine(line)
+		es, ok := p.ParseLine(line)
 		if !ok {
 			t.Fatalf("ParseLine(%q) unexpectedly failed to match", line)
 		}
-		years = append(years, e.Timestamp.Year())
+		years = append(years, es[0].Timestamp.Year())
 	}
 
 	want := []int{years[0], years[0] + 1, years[0] + 1, years[0] + 2}

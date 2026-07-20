@@ -4,6 +4,7 @@ package parser
 
 import (
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -39,6 +40,38 @@ var (
 	)
 
 	formats = []*regexp.Regexp{pamUnixRe, openSSHRe}
+
+	// pamUnixBodyRe and openSSHBodyRe match just the message body (no
+	// timestamp/host/process prefix) of the two formats above, used to
+	// re-parse the message rsyslog wraps inside a "message repeated"
+	// line (see repeatedRe). Kept as separate patterns rather than
+	// factored out of pamUnixRe/openSSHRe so those two -- already
+	// covered by real-data tests -- are untouched by this addition.
+	pamUnixBodyRe = regexp.MustCompile(
+		`^authentication failure;.*?\brhost=(?P<source>\S+?)(?:\s+user=(?P<user>\S+))?\s*$`,
+	)
+	openSSHBodyRe = regexp.MustCompile(
+		`^Failed password for (?:invalid user\s+)?(?P<user>\S+) from (?P<source>\S+) port \d+ ssh2\s*$`,
+	)
+	bodyFormats = []*regexp.Regexp{pamUnixBodyRe, openSSHBodyRe}
+
+	// repeatedRe matches rsyslog's own repeated-message collapsing
+	// (Ubuntu's default $RepeatedMsgReduction on): rather than logging
+	// the same line twice in a row, rsyslog logs it once, then a
+	// summary line once the repeats stop or a different message
+	// arrives:
+	//   Jul 20 23:13:59 host sshd[31120]: message repeated 4 times: [ Failed password for root from 45.148.10.152 port 40498 ssh2]
+	// Confirmed on the real honeypot droplet: a single SSH connection
+	// making several password attempts logs an identical "Failed
+	// password for ..." line each time, so this collapsing hits
+	// exactly the burst shape this tool exists to detect -- without
+	// expanding it, those attempts are invisible to the parser, not
+	// just miscounted (a real 5-attempt burst was observed showing
+	// only 1 parsed event, which at the default -threshold 5 means
+	// the burst wouldn't be flagged at all).
+	repeatedRe = regexp.MustCompile(
+		`^(?P<ts>[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+\S+\s+sshd(?:\(pam_unix\))?\[\d+\]:\s+message repeated (?P<count>\d+) times:\s+\[\s*(?P<inner>.+?)\s*\]\s*$`,
+	)
 )
 
 // Parser extracts failed-auth events from a sequence of log lines,
@@ -59,11 +92,14 @@ func NewParser() *Parser {
 	return &Parser{}
 }
 
-// ParseLine attempts to extract a failed-auth event from a single log
+// ParseLine attempts to extract failed-auth events from a single log
 // line. Most lines in a real auth log are unrelated to SSH auth
 // failures (session open/close, cron, logrotate, ...) — ok is false
-// for those, which is the normal case, not an error.
-func (p *Parser) ParseLine(line string) (event AuthFailureEvent, ok bool) {
+// for those, which is the normal case, not an error. A line usually
+// yields exactly one event, but a "message repeated N times: [...]"
+// line (see repeatedRe) yields N -- rsyslog's own collapsing of
+// consecutive identical lines represents N real attempts, not one.
+func (p *Parser) ParseLine(line string) (events []AuthFailureEvent, ok bool) {
 	for _, re := range formats {
 		match := re.FindStringSubmatch(line)
 		if match == nil {
@@ -76,14 +112,63 @@ func (p *Parser) ParseLine(line string) (event AuthFailureEvent, ok bool) {
 			continue
 		}
 
-		return AuthFailureEvent{
+		return []AuthFailureEvent{{
 			Timestamp: p.resolveYear(raw),
 			Source:    groups["source"],
 			User:      groups["user"],
 			Raw:       line,
-		}, true
+		}}, true
 	}
-	return AuthFailureEvent{}, false
+	return p.parseRepeated(line)
+}
+
+// parseRepeated expands an rsyslog repeated-message summary line into
+// the N real events it stands in for, by re-parsing the message body
+// rsyslog wrapped inside it against the same formats ParseLine
+// otherwise matches. rsyslog only keeps the timestamp of the summary
+// line itself, not each individual occurrence's real time, so all N
+// synthetic events share that one timestamp -- a documented precision
+// loss, not a bug: the alternative (not expanding at all) silently
+// drops the attempts entirely, which is strictly worse for detection.
+func (p *Parser) parseRepeated(line string) (events []AuthFailureEvent, ok bool) {
+	match := repeatedRe.FindStringSubmatch(line)
+	if match == nil {
+		return nil, false
+	}
+	groups := namedGroups(repeatedRe, match)
+
+	count, err := strconv.Atoi(groups["count"])
+	if err != nil || count <= 0 {
+		return nil, false
+	}
+
+	var source, user string
+	matched := false
+	for _, re := range bodyFormats {
+		bodyMatch := re.FindStringSubmatch(groups["inner"])
+		if bodyMatch == nil {
+			continue
+		}
+		bodyGroups := namedGroups(re, bodyMatch)
+		source, user = bodyGroups["source"], bodyGroups["user"]
+		matched = true
+		break
+	}
+	if !matched {
+		return nil, false
+	}
+
+	raw, err := time.Parse(syslogTimeLayout, groups["ts"])
+	if err != nil {
+		return nil, false
+	}
+	ts := p.resolveYear(raw)
+
+	events = make([]AuthFailureEvent, count)
+	for i := range events {
+		events[i] = AuthFailureEvent{Timestamp: ts, Source: source, User: user, Raw: line}
+	}
+	return events, true
 }
 
 // resolveYear assigns a consistent, monotonically increasing year to

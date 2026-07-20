@@ -83,8 +83,8 @@ func scanFile(path string, p *parser.Parser) (events []parser.AuthFailureEvent, 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		if event, ok := p.ParseLine(scanner.Text()); ok {
-			events = append(events, event)
+		if evs, ok := p.ParseLine(scanner.Text()); ok {
+			events = append(events, evs...)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -118,13 +118,15 @@ func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Co
 			fmt.Fprintf(os.Stderr, "warning: %v\n", line.Err)
 			continue
 		}
-		event, ok := p.ParseLine(line.Text)
+		evs, ok := p.ParseLine(line.Text)
 		if !ok {
 			continue
 		}
-		if alert, ok := live.Feed(event); ok {
-			if err := printLiveAlert(alert, jsonOut, summary); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		for _, event := range evs {
+			if alert, ok := live.Feed(event); ok {
+				if err := printLiveAlert(alert, jsonOut, summary); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				}
 			}
 		}
 	}
