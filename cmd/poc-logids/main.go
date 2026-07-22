@@ -11,8 +11,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
+	"time"
 
+	"github.com/tahovig/poc-logids/internal/counterintel"
 	"github.com/tahovig/poc-logids/internal/detector"
 	"github.com/tahovig/poc-logids/internal/output"
 	"github.com/tahovig/poc-logids/internal/parser"
@@ -27,6 +30,10 @@ func main() {
 	window := flag.Duration("window", detector.DefaultConfig.Window, "time window attempts must fall within (e.g. 60s, 5m)")
 	follow := flag.Bool("follow", false, "keep watching the file for new activity after the initial scan, like tail -f")
 	quietStartup := flag.Bool("quiet-startup", false, "with -follow, skip printing the initial batch scan's alerts and only report new activity going forward -- for a long-running service that may restart (crash, reboot) and shouldn't re-report the whole file's history each time")
+	ctiEnabled := flag.Bool("cti", false, "enable passive threat-intel enrichment (RDAP + GeoIP) for repeat or critical-severity sources -- makes outbound HTTP calls to public registries; off by default")
+	ctiThreshold := flag.Int("cti-threshold", counterintel.DefaultConfig.RepeatThreshold, "failed-auth events from the same source within -cti-window that trigger enrichment")
+	ctiWindow := flag.Duration("cti-window", counterintel.DefaultConfig.RepeatWindow, "time window -cti-threshold repeats are counted within")
+	ctiCooldown := flag.Duration("cti-cooldown", counterintel.DefaultConfig.Cooldown, "minimum time between repeat enrichments of the same source")
 	flag.Parse()
 
 	if *filePath == "" {
@@ -41,6 +48,11 @@ func main() {
 	}
 
 	cfg := detector.Config{Threshold: *threshold, Window: *window}
+	ctiCfg := counterintel.Config{RepeatThreshold: *ctiThreshold, RepeatWindow: *ctiWindow, Cooldown: *ctiCooldown}
+	var cti *counterintel.Tracker
+	if *ctiEnabled {
+		cti = counterintel.NewTracker(ctiCfg)
+	}
 
 	p := parser.NewParser()
 	events, offset, err := scanFile(*filePath, p)
@@ -49,10 +61,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	alerts := detector.Detect(events, cfg)
 	if !*quietStartup {
-		if err := printAlerts(detector.Detect(events, cfg), *jsonOut, *summary); err != nil {
+		if err := printAlerts(alerts, *jsonOut, *summary); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
+		}
+		// Gated the same as printAlerts, and for the same reason
+		// -quiet-startup exists: a restarted long-running service
+		// shouldn't re-spend enrichment lookups (or reset repeat
+		// history) on the same historical alerts every time it comes
+		// back up. Skipping here means the Tracker's history starts
+		// fresh too, consistent with -quiet-startup only caring about
+		// new activity going forward.
+		if cti != nil {
+			runEnrichment(context.Background(), events, alerts, cti, *jsonOut)
 		}
 	}
 
@@ -64,7 +87,7 @@ func main() {
 	// carries over: it depends on having seen every line since the
 	// start of the file in order, and -follow continues that same
 	// chronological stream rather than starting a new one.
-	if err := runFollow(*filePath, offset, p, cfg, *jsonOut, *summary); err != nil {
+	if err := runFollow(*filePath, offset, p, cfg, cti, *jsonOut, *summary); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -100,7 +123,7 @@ func scanFile(path string, p *parser.Parser) (events []parser.AuthFailureEvent, 
 
 // runFollow watches path for new activity starting at startOffset,
 // printing each alert as soon as it's detected, until interrupted.
-func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Config, jsonOut, summary bool) error {
+func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Config, cti *counterintel.Tracker, jsonOut, summary bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -123,9 +146,24 @@ func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Co
 			continue
 		}
 		for _, event := range evs {
-			if alert, ok := live.Feed(event); ok {
-				if err := printLiveAlert(alert, jsonOut, summary); err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			// Checked for every event, not just ones that end up part
+			// of an alerted burst -- this is what catches a source
+			// too patient to ever trip live's own Threshold.
+			if cti != nil {
+				if reason, ok := cti.ObserveEvent(event); ok {
+					printCTI(ctx, event.Source, reason, jsonOut)
+				}
+			}
+			alert, ok := live.Feed(event)
+			if !ok {
+				continue
+			}
+			if err := printLiveAlert(alert, jsonOut, summary); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			}
+			if cti != nil {
+				if reason, ok := cti.ObserveAlert(alert); ok {
+					printCTI(ctx, alert.Source, reason, jsonOut)
 				}
 			}
 		}
@@ -133,6 +171,57 @@ func runFollow(path string, startOffset int64, p *parser.Parser, cfg detector.Co
 
 	fmt.Fprintln(os.Stderr, "Stopped watching.")
 	return nil
+}
+
+// runEnrichment feeds events and alerts through cti in true
+// chronological order (merged, not events-then-alerts), enriching
+// each source that crosses the bar. The merge matters: cti's cooldown
+// math is timestamp-based, not call-order-based, so processing an
+// early event after a later alert (e.g. all events first, then all
+// alerts) could let that alert's cooldown wrongly suppress an event
+// that actually happened first. Used by the batch scan path;
+// -follow's live path calls cti.ObserveEvent/ObserveAlert inline
+// instead, since there events and alerts already arrive in real
+// chronological order one at a time.
+func runEnrichment(ctx context.Context, events []parser.AuthFailureEvent, alerts []detector.Alert, cti *counterintel.Tracker, jsonOut bool) {
+	type observation struct {
+		ts      time.Time
+		source  string
+		observe func() (counterintel.Reason, bool)
+	}
+
+	obs := make([]observation, 0, len(events)+len(alerts))
+	for _, e := range events {
+		obs = append(obs, observation{ts: e.Timestamp, source: e.Source, observe: func() (counterintel.Reason, bool) { return cti.ObserveEvent(e) }})
+	}
+	for _, a := range alerts {
+		obs = append(obs, observation{ts: a.LastSeen, source: a.Source, observe: func() (counterintel.Reason, bool) { return cti.ObserveAlert(a) }})
+	}
+	sort.SliceStable(obs, func(i, j int) bool { return obs[i].ts.Before(obs[j].ts) })
+
+	for _, o := range obs {
+		if reason, ok := o.observe(); ok {
+			printCTI(ctx, o.source, reason, jsonOut)
+		}
+	}
+}
+
+// printCTI enriches source and prints the result. CTI output always
+// goes to stderr, never stdout: stdout is reserved for the alert
+// output itself (table/JSON/summary), and enrichment is supplementary
+// context about it, not part of the detection artifact.
+func printCTI(ctx context.Context, source string, reason counterintel.Reason, jsonOut bool) {
+	intel := counterintel.Enrich(ctx, source)
+	if jsonOut {
+		data, err := output.ToCTIJSONLine(intel, reason)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cti: %v\n", err)
+			return
+		}
+		fmt.Fprintln(os.Stderr, string(data))
+		return
+	}
+	fmt.Fprintln(os.Stderr, output.ToCTILine(intel, reason))
 }
 
 func printAlerts(alerts []detector.Alert, jsonOut, summary bool) error {
