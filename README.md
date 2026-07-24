@@ -33,13 +33,19 @@ Run against [loghub](https://github.com/logpai/loghub)'s full real Linux syslog 
 
 ```
 go build -o poc-logids ./cmd/poc-logids
-./poc-logids -file <path> [-json] [-threshold N] [-window 60s] [-follow]
+./poc-logids -file <path> [-json] [-summary] [-threshold N] [-window 60s] [-follow] [-quiet-startup] [-cti]
 ```
 
 - `-threshold` (default 5) — minimum failed attempts from one source to flag as brute-force.
 - `-window` (default 60s) — max gap allowed between consecutive attempts for them to count as the same burst.
 - `-json` — JSON output instead of the table/one-line format.
+- `-summary` — plain-English outline grouped by severity instead of the table, with best-effort reverse-DNS naming (mutually exclusive with `-json`).
 - `-follow` — after the initial scan, keep watching the file and print each new alert as soon as it's detected (Ctrl+C to stop). Unlike the batch scan, which reports a burst only once it's fully over, `-follow` alerts the instant a burst first crosses `-threshold`, since waiting for an in-progress attack to stop before reporting it defeats the point of live monitoring.
+- `-quiet-startup` — with `-follow`, suppress the initial batch scan's printed alerts (the scan/offset/year-inference tracking still happens) so a restarted long-running service doesn't re-report the whole file's history every time it comes back up.
+- `-cti` — enable passive threat-intel enrichment for repeat or unusually severe source IPs: RDAP (network/org ownership) and ip-api.com (GeoIP/ASN), both keyless public-registry lookups — never traffic to the source itself. Off by default since it makes outbound HTTP calls. Output goes to stderr as `[CTI] ...` (or a tagged `"type":"cti"` JSON line with `-json`), separate from the alert stream on stdout.
+  - `-cti-threshold` (default 3) — failed-auth events from the same source within `-cti-window` that trigger enrichment (catches a source too patient to ever trip `-threshold`/`-window`'s own burst detection).
+  - `-cti-window` (default 1h) — time window `-cti-threshold` repeats are counted within.
+  - `-cti-cooldown` (default 24h) — minimum time between repeat enrichments of the same source.
 
 On a real terminal, the table and `-follow`'s one-line alerts are sorted/colored by severity — critical (red, ≥4x `-threshold`) and warning (yellow, ≥2x `-threshold`) rows stand out from routine ones, and the table sorts worst-first rather than chronologically, so the alerts most worth reviewing don't get buried in an equally-weighted list. Color is skipped automatically for piped/redirected output (`-json`, `| less`, a log file) — never invisible ANSI bytes cluttering non-terminal output. A RATE column (attempts/minute) is included alongside the raw count, since a fast burst is a stronger signal than a slow one at the same attempt count.
 
