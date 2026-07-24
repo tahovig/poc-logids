@@ -5,6 +5,7 @@ package parser
 import (
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -114,8 +115,8 @@ func (p *Parser) ParseLine(line string) (events []AuthFailureEvent, ok bool) {
 
 		return []AuthFailureEvent{{
 			Timestamp: p.resolveYear(raw),
-			Source:    groups["source"],
-			User:      groups["user"],
+			Source:    sanitizeField(groups["source"]),
+			User:      sanitizeField(groups["user"]),
 			Raw:       line,
 		}}, true
 	}
@@ -150,7 +151,7 @@ func (p *Parser) parseRepeated(line string) (events []AuthFailureEvent, ok bool)
 			continue
 		}
 		bodyGroups := namedGroups(re, bodyMatch)
-		source, user = bodyGroups["source"], bodyGroups["user"]
+		source, user = sanitizeField(bodyGroups["source"]), sanitizeField(bodyGroups["user"])
 		matched = true
 		break
 	}
@@ -189,6 +190,27 @@ func (p *Parser) resolveYear(raw time.Time) time.Time {
 	p.started = true
 	p.lastMonth = month
 	return time.Date(p.year, month, raw.Day(), raw.Hour(), raw.Minute(), raw.Second(), 0, time.UTC)
+}
+
+// sanitizeField strips ASCII control bytes (0x00-0x1F, 0x7F) from a
+// captured source/user field. sshd logs whatever a client sends
+// completely unsanitized, and \S+ in the regexes above happily
+// captures raw control bytes along with everything else -- a
+// legitimate username or rhost never contains one, but a hostile
+// client can send one deliberately (e.g. ANSI/CSI escape sequences
+// appended to a "username") specifically to corrupt a naive
+// terminal-based log viewer: printed as-is, the escape bytes get
+// interpreted by the terminal (cursor moves, screen clears) rather
+// than displayed, which is exactly the kind of thing a security tool
+// must not forward untouched. Raw keeps the original, unsanitized
+// line for forensic purposes; only the parsed-out fields are cleaned.
+func sanitizeField(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func namedGroups(re *regexp.Regexp, match []string) map[string]string {

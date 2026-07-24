@@ -66,6 +66,42 @@ func TestParseLine(t *testing.T) {
 			line:   "",
 			wantOK: false,
 		},
+		{
+			// sshd logs whatever username a client sends, unsanitized
+			// -- constructed here to demonstrate a hostile client
+			// appending an ANSI cursor-down escape sequence (ESC [ 8
+			// B) to a "username" specifically to corrupt a
+			// terminal-based log viewer (real usernames never contain
+			// control bytes). Only the ESC byte itself is a control
+			// character -- sanitizeField strips it, which neutralizes
+			// the escape sequence (a terminal only recognizes CSI
+			// sequences by their leading ESC), but the remaining
+			// printable "[8B" is left behind as inert text; the goal
+			// is preventing execution, not full cosmetic cleanup.
+			// Raw (checked below) still keeps the original bytes
+			// intact.
+			name:       "openssh, control bytes in username stripped",
+			line:       "Jun 20 11:22:33 host sshd[5678]: Failed password for invalid user root\x1b[8B from 10.0.0.6 port 51235 ssh2",
+			wantOK:     true,
+			wantSource: "10.0.0.6",
+			wantUser:   "root[8B",
+			wantTS:     "Jun 20 11:22:33",
+		},
+		{
+			// A more directly disruptive payload: repeated vertical-
+			// tab bytes (each moves the cursor down a line in most
+			// terminals), no CSI structure needed -- this is the
+			// shape that would produce exactly the large blank
+			// vertical gaps seen against real honeypot data. Every
+			// byte here is a control byte, so sanitizeField removes
+			// the whole thing, leaving a clean username.
+			name:       "openssh, repeated vertical-tab bytes fully stripped",
+			line:       "Jun 20 11:22:34 host sshd[5679]: Failed password for root\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b from 10.0.0.7 port 51236 ssh2",
+			wantOK:     true,
+			wantSource: "10.0.0.7",
+			wantUser:   "root",
+			wantTS:     "Jun 20 11:22:34",
+		},
 	}
 
 	for _, tt := range tests {
