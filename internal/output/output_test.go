@@ -55,6 +55,54 @@ func TestToTable_ContainsExpectedValues(t *testing.T) {
 	}
 }
 
+func TestToTable_LongUsersListDoesNotPadOtherRows(t *testing.T) {
+	// Reproduces a real bug found against a 10,000-line honeypot
+	// capture: one source with a huge Users list (real bursts can try
+	// hundreds of usernames) became the widest cell in the table, and
+	// every other row's line -- including short ones -- got padded
+	// out to match that shared column width, wrapping into what
+	// looked like large blank gaps on a real terminal. Every row's
+	// line must end right after its own content, regardless of how
+	// wide any other row's Users list is.
+	manyUsers := make([]string, 50)
+	for i := range manyUsers {
+		manyUsers[i] = fmt.Sprintf("user%d", i)
+	}
+	alerts := []detector.Alert{
+		{Source: "77.239.124.249", Attempts: 186, FirstSeen: at(0), LastSeen: at(60), Users: manyUsers},
+		{Source: "45.148.10.157", Attempts: 5, FirstSeen: at(0), LastSeen: at(60), Users: []string{"root"}},
+	}
+
+	for _, line := range strings.Split(strings.TrimRight(ToTable(alerts), "\n"), "\n") {
+		if strings.HasSuffix(line, " ") {
+			t.Errorf("line has trailing padding, which is what caused the blank-gap bug: %q", line)
+		}
+	}
+}
+
+func TestCapUsers_TruncatesWithRollupSuffix(t *testing.T) {
+	users := make([]string, tableUsersCap+3)
+	for i := range users {
+		users[i] = fmt.Sprintf("u%d", i)
+	}
+	got := capUsers(users, ", ")
+	if strings.Count(got, ",") != tableUsersCap {
+		t.Errorf("capUsers() = %q, want exactly %d shown users before the rollup", got, tableUsersCap)
+	}
+	if !strings.HasSuffix(got, "+3 more") {
+		t.Errorf("capUsers() = %q, want a trailing \"+3 more\"", got)
+	}
+}
+
+func TestCapUsers_UnderCapReturnsUnchanged(t *testing.T) {
+	users := []string{"root", "admin"}
+	got := capUsers(users, ", ")
+	want := "root, admin"
+	if got != want {
+		t.Errorf("capUsers() = %q, want %q", got, want)
+	}
+}
+
 func TestRate_FloorsZeroDuration(t *testing.T) {
 	// FirstSeen == LastSeen happens for real: syslog's one-second
 	// timestamp resolution can put an entire fast burst in one

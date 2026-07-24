@@ -130,7 +130,7 @@ func ToLine(a detector.Alert) string {
 func renderLine(a detector.Alert, color bool) string {
 	users := "-"
 	if len(a.Users) > 0 {
-		users = strings.Join(a.Users, ",")
+		users = capUsers(a.Users, ",")
 	}
 	line := fmt.Sprintf("[ALERT] %s  source=%s  attempts=%d  rate=%s  users=%s",
 		a.LastSeen.Format(tableTimeLayout), a.Source, a.Attempts, formatRate(a), users)
@@ -148,6 +148,27 @@ func ToTable(alerts []detector.Alert) string {
 	return renderTable(alerts, isTerminal(os.Stdout))
 }
 
+// tableUsersCap bounds how many usernames render directly before the
+// rest collapse into a "+N more" suffix, used by both the table's
+// USERS TRIED column and ToLine. Without this, a single high-volume
+// source's list of attempted usernames (real bursts can try hundreds)
+// became the longest cell in the whole table -- and since pad()
+// (below) aligned every row to each column's shared max width, that
+// one outlier row silently padded every other row's line with
+// thousands of trailing spaces, which a real terminal then wrapped
+// into what looked like large blank gaps between rows. Found against
+// a real 10,000-line honeypot capture, not synthetic data -- a
+// synthetic fixture never has one source with a wordlist-sized user
+// list sitting next to sources with just one or two attempts.
+const tableUsersCap = 8
+
+func capUsers(users []string, sep string) string {
+	if len(users) <= tableUsersCap {
+		return strings.Join(users, sep)
+	}
+	return fmt.Sprintf("%s%s+%d more", strings.Join(users[:tableUsersCap], sep), sep, len(users)-tableUsersCap)
+}
+
 func renderTable(alerts []detector.Alert, color bool) string {
 	if len(alerts) == 0 {
 		return "No brute-force activity detected.\n"
@@ -163,7 +184,7 @@ func renderTable(alerts []detector.Alert, color bool) string {
 			formatRate(a),
 			a.FirstSeen.Format(tableTimeLayout),
 			a.LastSeen.Format(tableTimeLayout),
-			strings.Join(a.Users, ", "),
+			capUsers(a.Users, ", "),
 		})
 	}
 
@@ -179,9 +200,18 @@ func renderTable(alerts []detector.Alert, color bool) string {
 		}
 	}
 
+	// The last column is never padded: nothing follows it on the
+	// line, so padding it serves no alignment purpose -- it only
+	// ever added trailing whitespace, which is exactly what turned
+	// one oversized USERS TRIED cell into blank-looking gaps after
+	// every other row (see tableUsersCap above).
 	pad := func(cells []string) string {
 		var line strings.Builder
 		for i, cell := range cells {
+			if i == len(cells)-1 {
+				line.WriteString(cell)
+				continue
+			}
 			fmt.Fprintf(&line, "%-*s", widths[i]+2, cell)
 		}
 		return line.String()
