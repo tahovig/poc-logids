@@ -26,6 +26,7 @@ func main() {
 	filePath := flag.String("file", "", "path to an auth-log-style file to scan (required)")
 	jsonOut := flag.Bool("json", false, "output alerts as JSON instead of a table")
 	summary := flag.Bool("summary", false, "output alerts as a plain-English outline instead of a table -- for a reader who isn't a security analyst")
+	stats := flag.Bool("stats", false, "output alerts as an aggregate stats view (severity distribution, activity histogram, top offenders) instead of a table -- batch mode only, not combinable with -follow")
 	threshold := flag.Int("threshold", detector.DefaultConfig.Threshold, "minimum failed attempts from one source to flag as brute-force")
 	window := flag.Duration("window", detector.DefaultConfig.Window, "time window attempts must fall within (e.g. 60s, 5m)")
 	follow := flag.Bool("follow", false, "keep watching the file for new activity after the initial scan, like tail -f")
@@ -46,6 +47,16 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	if *stats && (*jsonOut || *summary) {
+		fmt.Fprintln(os.Stderr, "error: -stats is mutually exclusive with -json and -summary")
+		flag.Usage()
+		os.Exit(1)
+	}
+	if *stats && *follow {
+		fmt.Fprintln(os.Stderr, "error: -stats aggregates the whole batch and isn't supported with -follow")
+		flag.Usage()
+		os.Exit(1)
+	}
 
 	cfg := detector.Config{Threshold: *threshold, Window: *window}
 	ctiCfg := counterintel.Config{RepeatThreshold: *ctiThreshold, RepeatWindow: *ctiWindow, Cooldown: *ctiCooldown}
@@ -63,7 +74,7 @@ func main() {
 
 	alerts := detector.Detect(events, cfg)
 	if !*quietStartup {
-		if err := printAlerts(alerts, *jsonOut, *summary); err != nil {
+		if err := printAlerts(alerts, *jsonOut, *summary, *stats); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -224,7 +235,7 @@ func printCTI(ctx context.Context, source string, reason counterintel.Reason, js
 	fmt.Fprintln(os.Stderr, output.ToCTILine(intel, reason))
 }
 
-func printAlerts(alerts []detector.Alert, jsonOut, summary bool) error {
+func printAlerts(alerts []detector.Alert, jsonOut, summary, stats bool) error {
 	switch {
 	case jsonOut:
 		out, err := output.ToJSON(alerts)
@@ -234,6 +245,8 @@ func printAlerts(alerts []detector.Alert, jsonOut, summary bool) error {
 		fmt.Println(string(out))
 	case summary:
 		fmt.Print(output.ToSummary(alerts))
+	case stats:
+		fmt.Print(output.ToStats(alerts))
 	default:
 		fmt.Print(output.ToTable(alerts))
 	}
